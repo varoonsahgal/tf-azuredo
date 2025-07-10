@@ -7,19 +7,59 @@ pool:
 variables:
   TF_VERSION: '1.6.0'
 
-steps:
-- task: TerraformInstaller@1
-  inputs:
-    terraformVersion: $(TF_VERSION)
+# -------- STAGE 1: PLAN --------
+stages:
+- stage: TerraformPlan
+  jobs:
+  - job: plan
+    displayName: 'Terraform Plan'
+    steps:
+    - task: TerraformInstaller@1
+      inputs:
+        terraformVersion: $(TF_VERSION)
 
-# ✅ Authenticate to Azure using the service connection
-- task: AzureCLI@2
-  inputs:
-    azureSubscription: 'DataCouch (d52a6d4f-8a6b-4e23-a011-dbb0c8d7eddc)'  # Replace with your actual service connection name
-    scriptType: 'bash'
-    scriptLocation: 'inlineScript'
-    inlineScript: |
-      # Init and apply
-      terraform init
-      terraform plan -out=tfplan
-      terraform apply -auto-approve tfplan
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: 'DataCouch (d52a6d4f-8a6b-4e23-a011-dbb0c8d7eddc)' 
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          terraform init
+          terraform plan -out=tfplan
+          ls -la  # Optional debug: confirm tfplan exists
+
+    - publish: tfplan
+      artifact: terraformPlan
+
+# -------- STAGE 2: APPLY --------
+- stage: TerraformApply
+  displayName: 'Terraform Apply with Approval'
+  dependsOn: TerraformPlan
+  condition: succeeded()
+
+  jobs:
+  - deployment: apply
+    displayName: 'Terraform Apply'
+    environment: terraform-prod  # 🔒 Requires manual approval if configured in DevOps UI
+
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: TerraformInstaller@1
+            inputs:
+              terraformVersion: $(TF_VERSION)
+
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              artifact: terraformPlan
+              path: $(System.DefaultWorkingDirectory)
+
+          - task: AzureCLI@2
+            inputs:
+              azureSubscription: 'DataCouch (d52a6d4f-8a6b-4e23-a011-dbb0c8d7eddc)' 
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                terraform init
+                terraform apply -auto-approve tfplan
